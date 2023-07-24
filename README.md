@@ -10,5 +10,5 @@ Demonstrate understanding of financial markets and derivatives pricing
 3) Credit risk analysis
 Analyze a book of loans to estimate a customer's probability of default
 
-Bucket FICO scores
+4) Bucket FICO scores
 Use dynamic programming to convert FICO scores into categorical data to predict defaults
