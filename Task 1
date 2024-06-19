@@ -1,0 +1,265 @@
+import pandas as pd 
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from statsmodels.tsa.stattools import adfuller
+from datetime import datetime
+
+#from downloads
+df = pd.read_csv(r'C:\Users\RiRi\Downloads\Nat_Gas.csv')
+df.head(5)
+
+print(df.dtypes)
+
+df = df.dropna(how='any',axis=0)
+df.drop_duplicates(subset ="Dates", keep = False, inplace = True)
+rows = df.shape[0]
+
+print("Rows: " + str(rows))
+df.head(6)
+
+df["Dates"]=pd.to_datetime(df["Dates"])
+
+print(df.dtypes)
+rows = df.shape[0]
+
+print("Rows: " + str(rows))
+df.head(6)
+
+import matplotlib.dates as mdates
+df['Year'] = df['Dates'].dt.year
+df['Month'] = df['Dates'].dt.month
+
+fig, ax = plt.subplots(figsize=(8, 6))
+half_year_locator = mdates.MonthLocator(interval=6)
+year_month_formatter = mdates.DateFormatter("%Y-%m") # four digits for year, two for month
+monthly_locator = mdates.MonthLocator()
+
+ax.xaxis.set_major_locator(half_year_locator)
+ax.xaxis.set_minor_locator(monthly_locator)
+ax.xaxis.set_major_formatter(year_month_formatter) # formatter for major axis only
+
+plt.xlabel('Date')
+plt.ylabel('Gas Price')
+plt.title('Historical Gas Prices')
+ax.plot(df['Dates'], df["Prices"])
+
+sns.lineplot(data=df, x="Month", y="Prices", hue="Year", style="Year")
+
+#ARIMA model is it does not support seasonality
+# Split the data into training and testing sets
+train_data = df['Prices'].iloc[:-12]  # Use all but not the last 12 months for training
+test_data = df['Prices'].iloc[-12:]  # Last 12 months for testing
+
+#Augmented Dickey-Fuller test # extra for ARIMA model
+# Stationarity Check (for d) #p-value is more than 0.05 - non-stationary
+result = adfuller(df['Prices'])
+print(f'ADF Statistic: {result[0]}')
+print(f'p-value: {result[1]}')  #non-stationary #status of a time series whose statistical properties are changing through time
+# Interpretation: p-value > 0.05: Data has a unit root and is non-stationary. p-value <= 0.05: Data does not have a unit root and is stationary.
+
+#SARIMA Model
+# Plot
+fig, axes = plt.subplots(2, 1, figsize=(10,5), dpi=100, sharex=True)
+
+# Usual Differencing
+axes[0].plot(df['Prices'], label='Original Series')
+axes[0].plot(df['Prices'].diff(1), label='Usual Differencing')
+axes[0].set_title('Usual Differencing')
+axes[0].legend(loc='upper left', fontsize=10)
+
+
+# Seasinal Dei
+axes[1].plot(df['Prices'], label='Original Series')
+axes[1].plot(df['Prices'].diff(12), label='Seasonal Differencing', color='green')
+axes[1].set_title('Seasonal Differencing')
+plt.legend(loc='upper left', fontsize=10)
+plt.suptitle('Gas Price', fontsize=16)
+plt.show()
+
+#The usual differencing may have been sufficient to stabilize the mean, implying the original series might not have had a strong trend.
+#Seasonal differencing has likely removed the seasonal component of the series, which would be necessary for modeling if seasonal patterns were present.
+
+#The graph indicates that the original series has been differenced once (usual differencing) and also seasonally differenced at lag 12.
+#suggests that d=1 (one non-seasonal difference) and D=1 (one seasonal difference with a period of 12, likely corresponding to monthly data).
+
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+
+# ACF and PACF plots
+plot_acf(df['Prices']) #identifying the Moving Average (MA) component (q)
+#The ACF shows a gradual decline and does not cut off sharply, indicating a mixture of AR and MA components.
+# don't observe a clear cutoff point in the ACF plot. We could start with q=1 based on the first lag being outside the confidence interval.
+# For the seasonal MA component Q, no clear pattern is visible at seasonal lags. We might set Q=0 or Q=1 and use model diagnostics to fine-tune.
+plot_pacf(df['Prices']) #Autoregressive (AR) component (p)
+#The PACF shows a significant spike at lag 1 and then cuts off, which indicates an AR(1) component.
+#This suggests that p=1 (one autoregressive term).
+#No clear seasonal AR component is observed in the PACF plot provided. we might start with P=0 or P=1 and adjust based on model diagnostics.
+plt.show()
+
+
+# SARIMA(1, 1, 1)(1, 1, 1)12 or SARIMA(1, 1, 1)(0, 1, 0)12
+# model itself will generate the optimal p, d, and q values
+
+import pmdarima as pmd
+
+model=pmd.auto_arima(df['Prices'],start_p=1,start_q=1,test='adf',m=12,seasonal=True,trace=True)
+
+import statsmodels.api as sm
+
+# Fit the SARIMA model using the parameters derived from the plots
+model = sm.tsa.statespace.SARIMAX(df['Prices'],
+                                  order=(1, 0, 0),
+                                  seasonal_order=(1, 0, 0, 12),
+                                  enforce_stationarity=False,
+                                  enforce_invertibility=False)
+
+# Fit the model
+results = model.fit()
+
+print(results.summary())
+
+# Forecast prices for the next year (12 months)
+forecast_steps = 48
+forecast = results.get_forecast(steps=forecast_steps)
+forecast_mean = forecast.predicted_mean
+
+# Print the forecasted mean prices
+forecast_mean
+
+n_forecast_steps = 48  # 12 months for one year
+forecast = results.get_forecast(steps=n_forecast_steps)
+forecast_index = pd.date_range(df.iloc[-1]["Dates"], periods=n_forecast_steps + 1, freq='M')[1:]
+forecast_mean = forecast.predicted_mean
+
+
+# Assign the forecast to a DataFrame with the new dates
+forecast1 = pd.DataFrame({'forecast_mean': forecast_mean, 'key': range(1, 49)})
+forecast2 = pd.DataFrame({'forecast_index': forecast_index, 'key': range(1, 49)})
+
+# Merge the dataframes on the 'key' column
+forecast_df = pd.merge(forecast1, forecast2, on='key')
+
+# Set the 'key' column as the index
+forecast_df.set_index('key', inplace=True)
+
+# Show the resulting dataframe
+forecast_df.head(24)
+
+print(forecast_df.dtypes) # adding more column below
+
+forecast_df['Year']=forecast_df['forecast_index'].dt.year
+forecast_df['Month']=forecast_df['forecast_index'].dt.month
+
+def forecast_price(y, m, forecast_df):
+    for i, j in forecast_df.iterrows():
+        if y == j['Year'] and m == j['Month']:
+            return j['forecast_mean']
+
+year = input("enter a year: ")
+month = input("enter a month: ")
+price = forecast_price(int(year), int(month), forecast_df)
+print(f"The estimated price for {year}-{month} is {price}")
+
+# Visualizing the data
+plt.figure(figsize=(14, 6))
+plt.plot(forecast_df.index, forecast_df['forecast_mean'], label='Gas Prices')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.title('Natural Gas Prices Over Time')
+plt.legend()
+plt.show()
+
+# Decomposing the time series to find patterns
+from statsmodels.tsa.seasonal import seasonal_decompose
+decomposition = seasonal_decompose(forecast_df['forecast_mean'], model='additive', period=12) # period=12 in seasonal_decompose, 
+                                                # it instructs the function to look for and extract seasonal patterns that recur every 12 months. 
+
+# Plot the decomposed components
+fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(15, 12))
+decomposition.trend.plot(ax=ax1)
+ax1.set_title('Trend Component')
+decomposition.seasonal.plot(ax=ax2)
+ax2.set_title('Seasonal Component')
+decomposition.resid.plot(ax=ax3)
+ax3.set_title('Residual Component')
+plt.tight_layout()
+plt.show()
+
+# Create a boxplot to visualize monthly (seasonal) patterns
+# Adding a 'month' column to the DataFrame
+
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='Month', y='forecast_mean', data=forecast_df)
+plt.title('Monthly Variation in Natural Gas Prices')
+plt.xlabel('Month')
+plt.ylabel('Price')
+plt.show()
+
+from datetime import datetime
+from dateutil import relativedelta
+
+def calculate_contract_value(purchase_p, sell_p, vol, stor_fee, month_diff, inject_fee, withdraw_fee):
+
+    # Calculate the revenue from selling the gas
+    revenue = sell_p * vol
+
+    # Calculate the total cost of purchasing and storing the gas
+    total_cost = (purchase_p * vol) + (stor_fee*month_diff) + inject_fee + draw_fee # + trans_fee (add above)
+
+    # The value of the contract is the revenue minus the costs
+    contract_value = revenue - total_cost
+
+    return contract_value
+
+forecast_df['Year']=forecast_df['forecast_index'].dt.year
+forecast_df['Month']=forecast_df['forecast_index'].dt.month
+
+def forecast_price(y, m, df):
+    for i, j in forecast_df.iterrows():
+        if y == j['Year'] and m == j['Month']:
+            return j['forecast_mean']
+        
+def select_date(y, m, df):
+    for i, j in forecast_df.iterrows():
+        if y == j['Year'] and m == j['Month']:
+            return j['forecast_index']
+
+
+p_year = input("enter the purchase year: ")
+p_month = input("enter the purchase month: ")
+p_price = forecast_price(int(p_year), int(p_month), forecast_df)
+r1_date = select_date(int(p_year), int(p_month), forecast_df)
+print(f"The estimated price for the purchase date {p_year}-{p_month} is {p_price} per MMbtu.")
+
+
+s_year = input("enter the selling year: ")
+s_month = input("enter the selling month: ")
+s_price = forecast_price(int(s_year), int(s_month), forecast_df)
+r2_date = select_date(int(s_year), int(s_month), forecast_df)
+print(f"The estimated price for the selling date {s_year}-{s_month} is {s_price} per MMbtu.")
+
+
+# Get the relativedelta between two dates
+delta = relativedelta.relativedelta(r2_date, r1_date)
+# get months difference
+month_diff = delta.months + (delta.years * 12)
+print('Total Months between two dates is:', month_diff)
+
+
+vol = int(input("enter volumn (in millions): "))
+stor_fee = int(input("enter a storage fee(per Month): ")) # (could b) fixed fee
+inject_fee = int(input("enter a inject fee(per MMbtu): ")) # per million MMbtu, mostly same with inject&withdraw
+draw_fee = int(input("enter a withdraw fee(per MMbtu): ")) # per million MMbtu
+# trans_fee = int(input("enter a transfer fee: ")) # transportation fees per contract (fixed fee) (No need now)
+
+contract_val = calculate_contract_value(
+    p_price, 
+    s_price, 
+    vol, 
+    stor_fee,
+    month_diff, 
+    inject_fee, 
+    draw_fee
+)
+
+print(f"The value of the contract is: ${contract_val} for {vol}MMbtu")
